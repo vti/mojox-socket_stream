@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 49;
+use Test::More tests => 53;
 
 use MojoX::SocketStream::Redis::Message;
 
@@ -13,6 +13,12 @@ my $message = MojoX::SocketStream::Redis::Message->new;
 $message->build(auth => 'foo');
 is($message->write_buffer, "AUTH foo\r\n");
 is($message->get_chunk, "AUTH foo\r\n");
+
+# Bulk command
+$message = MojoX::SocketStream::Redis::Message->new;
+$message->build(set => qw/foo bar/);
+is($message->write_buffer, "SET foo 3\r\nbar\r\n");
+
 $message = MojoX::SocketStream::Redis::Message->new;
 $message->build(auth => 'foo');
 $message->_offset(1);
@@ -98,6 +104,13 @@ $message->parse("*0\r\n");
 is($message->type, 'multibulk');
 ok($message->is_done);
 is_deeply($message->answer, []);
+
+# Bulk response with nul values
+$message = MojoX::SocketStream::Redis::Message->new;
+$message->parse("*2\r\n\$3\r\nfoo\r\n\$-1\r\n");
+is($message->type, 'multibulk');
+ok($message->is_done);
+is_deeply($message->answer, ['foo', undef]);
 
 # \r\n
 $message = MojoX::SocketStream::Redis::Message->new;

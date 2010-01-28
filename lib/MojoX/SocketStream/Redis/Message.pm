@@ -22,20 +22,45 @@ my $BULK      = '$';
 my $MULTIBULK = '*';
 my $TYPE_RE   = '[' . quotemeta("$STATUS$ERROR$INTEGER$BULK$MULTIBULK") . ']';
 
+my %BULK_COMMANDS = map { $_ => 1 }
+  qw( SET SETNX RPUSH LPUSH LSET LREM SADD SREM SISMEMBER ECHO );
+
 sub build {
     my $self = shift;
-    my ($command, @args) = @_;
 
-    if (@args == 1 && ref $args[0] eq 'ARRAY') {
-        @args = @{$args[0]};
+    foreach my $cmd (ref $_[0] eq 'ARRAY' ? @_ : ([@_])) {
+        $self->write_buffer->add_chunk($self->_build(@$cmd));
+
+        $self->commands($self->commands + 1);
     }
 
-    my $chunk = uc $command;
-    $chunk .= ' ' . join(' ', @args);
-    $chunk .= "\x0d\x0a";
-    $self->write_buffer->add_chunk($chunk);
 
     return $self;
+}
+
+sub _build {
+    my $self = shift;
+
+    my $command = uc shift;
+
+    my $chunk = $command;
+    if ($BULK_COMMANDS{$command}) {
+        my $value = pop;
+        $chunk .= ' '
+            . join(' ', @_)
+            . ' '
+            . length($value)
+            . "\x0d\x0a"
+            . $value;
+        $value .= length($value);
+    }
+    else {
+        $chunk .= ' ' . join(' ', @_);
+    }
+
+    $chunk .= "\x0d\x0a";
+
+    return $chunk;
 }
 
 sub type {
@@ -126,7 +151,7 @@ sub parse {
             $line =~ s/^\$//;
 
             if ($line == -1) {
-                $self->answer(undef);
+                push @{$self->answer}, undef;
                 $self->_bulk_counter($self->_bulk_counter - 1);
             }
             else {
