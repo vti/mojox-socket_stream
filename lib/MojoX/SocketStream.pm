@@ -11,6 +11,7 @@ use MojoX::SocketStream::Message;
 use Scalar::Util 'weaken';
 
 __PACKAGE__->attr([qw/address port/]);
+__PACKAGE__->attr([qw/error/]);
 
 __PACKAGE__->attr([qw/default_cb/]);
 __PACKAGE__->attr([qw/max_keep_alive_connections/] => 5);
@@ -86,8 +87,6 @@ sub _build_message {
     # Callback
     my $cb = pop @_ if ref $_[-1] && ref $_[-1] eq 'CODE';
 
-    my @body = @_ == 1 && ref $_[0] eq 'ARRAY' ? @{$_[0]} : @_;
-
     # Address
     $message->address($self->address) if $self->address;
 
@@ -112,15 +111,6 @@ sub _connect {
 
     # Keep alive timeout
     $self->ioloop->connection_timeout($id => $self->keep_alive_timeout);
-
-    # Weaken
-    weaken $self;
-
-    # Callbacks
-    $self->ioloop->error_cb($id => sub { $self->_error(@_) });
-    $self->ioloop->hup_cb($id => sub { $self->_hup(@_) });
-    $self->ioloop->read_cb($id => sub { $self->_read(@_) });
-    $self->ioloop->write_cb($id => sub { $self->_write(@_) });
 }
 
 sub _deposit {
@@ -170,6 +160,9 @@ sub _error {
         # Add error message
         $message->error($error);
     }
+    else {
+        $self->error($error);
+    }
 
     # Finish
     $self->_finish($id);
@@ -197,7 +190,7 @@ sub _finish {
         my $cb = $c->{cb} || $self->default_cb;
 
         # Callback
-        $self->$cb($message) if $cb;
+        $self->$cb($message->answer, $message->error) if $cb;
     }
 
     # Stop ioloop
@@ -264,21 +257,24 @@ sub _queue {
         unless (defined $id) {
             $message->error("Couldn't create connection.");
             $cb ||= $self->default_cb;
-            $self->$cb($message) if $cb;
-            #die 'fuck';
+            $self->$cb($message->answer, $message->error) if $cb;
             return;
         }
+
+        # Callbacks
+        $self->ioloop->error_cb($id => sub { $self->_error(@_) });
+        $self->ioloop->hup_cb($id => sub { $self->_hup(@_) });
+        $self->ioloop->read_cb($id => sub { $self->_read(@_) });
+        $self->ioloop->write_cb($id => sub { $self->_write(@_) });
 
         # Add new connection
         $self->_connections->{$id} = {cb => $cb, message => $message};
     }
 
-    # Weaken
-    weaken $message;
-
     # State change callback
     $message->state_cb(
         sub {
+            my $message = shift;
 
             # Finished?
             return $self->_finish($id) if $message->is_finished;
